@@ -1,116 +1,87 @@
-export type StoredUser = {
+import type { User } from "@supabase/supabase-js";
+import { supabase } from "@/lib/supabase";
+
+export type UserProfile = {
+  id: string;
   username: string;
-  password: string;
-  profileImage?: string;
-  role?: "admin" | "user";
+  profile_image_url: string | null;
+  role: "admin" | "user";
 };
 
-export const DEFAULT_ADMIN: StoredUser = {
-  username: "Nabil1908",
-  password: "Nabil_angeline",
-  role: "admin",
-};
+export async function registerUser(email: string, password: string, username: string) {
+  const { data, error } = await supabase.auth.signUp({
+    email: email.trim().toLowerCase(),
+    password,
+    options: { data: { username: username.trim() } },
+  });
+  if (error) throw error;
+  return data;
+}
 
-const USERS_KEY = "motofix_users";
-const SESSION_KEY = "motofix_session";
+export async function loginUser(email: string, password: string) {
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email: email.trim().toLowerCase(),
+    password,
+  });
+  if (error) throw error;
+  return data;
+}
 
-export function getUsers(): StoredUser[] {
-  if (typeof window === "undefined") {
-    return [DEFAULT_ADMIN];
+export async function logoutUser() {
+  const { error } = await supabase.auth.signOut();
+  if (error) throw error;
+}
+
+export async function getCurrentUser(): Promise<UserProfile | null> {
+  const { data: authData, error: authError } = await supabase.auth.getUser();
+  if (authError || !authData.user) return null;
+  return getProfile(authData.user);
+}
+
+export async function getProfile(user?: User): Promise<UserProfile | null> {
+  let authUser = user;
+  if (!authUser) {
+    const { data, error } = await supabase.auth.getUser();
+    if (error || !data.user) return null;
+    authUser = data.user;
   }
 
-  const savedUsers = window.localStorage.getItem(USERS_KEY);
-  let users: StoredUser[] = [];
+  const { data: profile, error } = await supabase
+    .from("profiles")
+    .select("id, username, profile_image_url, role")
+    .eq("id", authUser.id)
+    .maybeSingle();
 
-  if (savedUsers) {
-    try {
-      const parsed: unknown = JSON.parse(savedUsers);
-      users = Array.isArray(parsed) ? (parsed as StoredUser[]) : [];
-    } catch {
-      users = [];
-    }
-  }
-
-  // Ensure default admin always exists and is up to date
-  const adminIndex = users.findIndex(
-    (u) => u.username.toLowerCase() === DEFAULT_ADMIN.username.toLowerCase(),
-  );
-
-  if (adminIndex === -1) {
-    users = [DEFAULT_ADMIN, ...users];
-    window.localStorage.setItem(USERS_KEY, JSON.stringify(users));
-  } else {
-    if (
-      users[adminIndex].password !== DEFAULT_ADMIN.password ||
-      users[adminIndex].role !== "admin"
-    ) {
-      users[adminIndex].password = DEFAULT_ADMIN.password;
-      users[adminIndex].role = "admin";
-      window.localStorage.setItem(USERS_KEY, JSON.stringify(users));
-    }
-  }
-
-  return users;
+  if (error) throw error;
+  return profile as UserProfile | null;
 }
 
-export function saveUser(user: StoredUser) {
-  window.localStorage.setItem(USERS_KEY, JSON.stringify([...getUsers(), user]));
+export async function hasValidSession(): Promise<boolean> {
+  const { data, error } = await supabase.auth.getUser();
+  return !error && Boolean(data.user);
 }
 
-export function updateUserProfileImage(username: string, profileImage: string) {
-  const users = getUsers().map((user) =>
-    user.username.toLowerCase() === username.toLowerCase()
-      ? { ...user, profileImage }
-      : user,
-  );
-
-  window.localStorage.setItem(USERS_KEY, JSON.stringify(users));
+export async function isAdmin(): Promise<boolean> {
+  const profile = await getCurrentUser();
+  return profile?.role === "admin";
 }
 
-export function getCurrentUser() {
-  const username = getSession();
-  return username
-    ? getUsers().find(
-        (user) => user.username.toLowerCase() === username.toLowerCase(),
-      ) || null
-    : null;
-}
+export async function updateUserProfileImage(file: File): Promise<string> {
+  const { data: authData, error: authError } = await supabase.auth.getUser();
+  if (authError || !authData.user) throw new Error("Silakan login kembali.");
 
-export function isAdmin(): boolean {
-  const current = getCurrentUser();
-  return (
-    current?.username.toLowerCase() === DEFAULT_ADMIN.username.toLowerCase() ||
-    current?.role === "admin"
-  );
-}
+  const extension = file.name.split(".").pop()?.toLowerCase() || "jpg";
+  const path = `${authData.user.id}/avatar.${extension}`;
+  const { error: uploadError } = await supabase.storage
+    .from("avatars")
+    .upload(path, file, { upsert: true, contentType: file.type });
+  if (uploadError) throw uploadError;
 
-export function setSession(username: string) {
-  window.localStorage.setItem(SESSION_KEY, username);
-}
-
-export function getSession() {
-  return window.localStorage.getItem(SESSION_KEY)?.trim() || null;
-}
-
-export function hasValidSession() {
-  const username = getSession();
-
-  if (!username) {
-    return false;
-  }
-
-  const isRegisteredUser = getUsers().some(
-    (user) => user.username.toLowerCase() === username.toLowerCase(),
-  );
-
-  if (!isRegisteredUser) {
-    clearSession();
-    return false;
-  }
-
-  return true;
-}
-
-export function clearSession() {
-  window.localStorage.removeItem(SESSION_KEY);
+  const { data } = supabase.storage.from("avatars").getPublicUrl(path);
+  const { error: profileError } = await supabase
+    .from("profiles")
+    .update({ profile_image_url: data.publicUrl })
+    .eq("id", authData.user.id);
+  if (profileError) throw profileError;
+  return data.publicUrl;
 }
