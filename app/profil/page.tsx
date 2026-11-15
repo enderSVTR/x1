@@ -4,62 +4,74 @@ import Link from "next/link";
 import { ChangeEvent, useEffect, useState } from "react";
 import { Camera, UserRound, ShieldCheck, CalendarCheck } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { getCurrentUser, hasValidSession, updateUserProfileImage } from "@/lib/auth";
+import { getCurrentUser, updateUserProfileImage, type UserProfile } from "@/lib/auth";
 
 export default function ProfilePage() {
   const router = useRouter();
-  const [username, setUsername] = useState("");
-  const [profileImage, setProfileImage] = useState("");
-  const [isUserAdmin, setIsUserAdmin] = useState(false);
+  const [user, setUser] = useState<UserProfile | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isUploading, setIsUploading] = useState(false);
   const [message, setMessage] = useState("");
 
   useEffect(() => {
-    if (!hasValidSession()) {
-      router.replace("/login?next=%2Fprofil");
-      return;
+    let active = true;
+    async function loadProfile() {
+      try {
+        const profile = await getCurrentUser();
+        if (!active) return;
+        if (!profile) {
+          router.replace("/login?next=%2Fprofil");
+          return;
+        }
+        setUser(profile);
+      } catch {
+        if (active) setMessage("Profil gagal dimuat. Coba muat ulang halaman.");
+      } finally {
+        if (active) setIsLoading(false);
+      }
     }
-
-    const user = getCurrentUser();
-    if (user) {
-      setUsername(user.username);
-      setProfileImage(user.profileImage || "");
-      setIsUserAdmin(user.username.toLowerCase() === "nabil1908" || user.role === "admin");
-    }
+    void loadProfile();
+    return () => { active = false; };
   }, [router]);
 
-  function handleImageChange(event: ChangeEvent<HTMLInputElement>) {
+  async function handleImageChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
-
-    if (!file.type.startsWith("image/")) {
-      setMessage("Silakan pilih file gambar.");
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+      setMessage("Silakan pilih file PNG, JPG, atau WEBP.");
+      event.target.value = "";
       return;
     }
-
     if (file.size > 2 * 1024 * 1024) {
       setMessage("Ukuran foto maksimal 2 MB.");
+      event.target.value = "";
       return;
     }
 
-    const reader = new FileReader();
-    reader.onload = () => {
-      const image = typeof reader.result === "string" ? reader.result : "";
-      if (!image) return;
-
-      updateUserProfileImage(username, image);
-      setProfileImage(image);
+    setIsUploading(true);
+    setMessage("");
+    try {
+      const imageUrl = await updateUserProfileImage(file);
+      setUser((current) => current ? { ...current, profile_image_url: imageUrl } : current);
       setMessage("Foto profil berhasil diperbarui.");
-    };
-    reader.readAsDataURL(file);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Foto gagal diunggah. Coba lagi.");
+    } finally {
+      setIsUploading(false);
+      event.target.value = "";
+    }
   }
 
-  if (!username) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50">
-        <p className="text-sm font-medium text-slate-500">Memuat profil...</p>
-      </div>
-    );
+  if (isLoading) {
+    return <div className="flex min-h-screen items-center justify-center bg-slate-50"><p className="text-sm font-medium text-slate-500">Memuat profil...</p></div>;
   }
+  if (!user) {
+    return <div className="flex min-h-screen items-center justify-center bg-slate-50"><p className="text-sm font-medium text-slate-500">{message || "Mengarahkan ke halaman login..."}</p></div>;
+  }
+
+  const username = user.username?.trim() || "Pengguna";
+  const profileImage = user.profile_image_url || "";
+  const isUserAdmin = user.role === "admin";
 
   return (
     <section className="min-h-screen bg-slate-50 px-4 pb-16 pt-32">
@@ -70,84 +82,35 @@ export default function ProfilePage() {
 
           <div className="mt-8 flex flex-col items-center">
             <div className="flex h-32 w-32 items-center justify-center overflow-hidden rounded-full bg-blue-50 ring-4 ring-blue-100">
-              {profileImage ? (
-                <img src={profileImage} alt={`Foto profil ${username}`} className="h-full w-full object-cover" />
-              ) : (
-                <UserRound className="h-16 w-16 text-blue-500" />
-              )}
+              {profileImage ? <img src={profileImage} alt={`Foto profil ${username}`} className="h-full w-full object-cover" /> : <UserRound className="h-16 w-16 text-blue-500" />}
             </div>
-
-            <label className="btn-primary mt-6 cursor-pointer">
+            <label className={`btn-primary mt-6 ${isUploading ? "cursor-wait opacity-60" : "cursor-pointer"}`}>
               <Camera className="h-5 w-5" />
-              Ubah Foto Profil
-              <input
-                type="file"
-                accept="image/png,image/jpeg,image/webp"
-                onChange={handleImageChange}
-                className="sr-only"
-              />
+              {isUploading ? "Mengunggah..." : "Ubah Foto Profil"}
+              <input type="file" accept="image/png,image/jpeg,image/webp" onChange={handleImageChange} disabled={isUploading} className="sr-only" />
             </label>
             <p className="mt-3 text-xs text-slate-500">PNG, JPG, atau WEBP, maksimal 2 MB.</p>
           </div>
 
           <div className="mt-8 rounded-xl bg-slate-50 p-4">
             <p className="text-sm text-slate-500">Username &amp; Hak Akses</p>
-            <div className="mt-1 flex items-center justify-between">
+            <div className="mt-1 flex items-center justify-between gap-3">
               <p className="font-semibold text-slate-900">{username}</p>
-              {isUserAdmin ? (
-                <span className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-100 px-3 py-1 text-xs font-bold text-amber-800">
-                  🛡️ ADMINISTRATOR
-                </span>
-              ) : (
-                <span className="inline-flex items-center rounded-full bg-slate-200 px-2.5 py-0.5 text-xs font-medium text-slate-700">
-                  Pengguna
-                </span>
-              )}
+              {isUserAdmin ? <span className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-100 px-3 py-1 text-xs font-bold text-amber-800">🛡️ ADMINISTRATOR</span> : <span className="inline-flex items-center rounded-full bg-slate-200 px-2.5 py-0.5 text-xs font-medium text-slate-700">Pengguna</span>}
             </div>
           </div>
 
-          {/* User Booking Status Link (Only for regular customers) */}
-          {!isUserAdmin && (
-            <div className="mt-4 p-4 rounded-2xl bg-blue-50/60 border border-blue-100 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center text-blue-600">
-                  <CalendarCheck className="w-5 h-5" />
-                </div>
-                <div>
-                  <p className="font-bold text-sm text-slate-900">Pesanan &amp; Servis Saya</p>
-                  <p className="text-xs text-slate-500">Lihat status pengerjaan atau booking ban Anda</p>
-                </div>
-              </div>
-              <Link
-                href="/pesanan"
-                className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition-all shadow-sm shadow-blue-600/20"
-              >
-                Cek Status
-              </Link>
-            </div>
-          )}
+          {!isUserAdmin && <div className="mt-4 flex items-center justify-between rounded-2xl border border-blue-100 bg-blue-50/60 p-4">
+            <div className="flex items-center gap-3"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-100 text-blue-600"><CalendarCheck className="h-5 w-5" /></div><div><p className="text-sm font-bold text-slate-900">Pesanan &amp; Servis Saya</p><p className="text-xs text-slate-500">Lihat status pengerjaan atau booking ban Anda</p></div></div>
+            <Link href="/pesanan" className="rounded-xl bg-blue-600 px-3.5 py-2 text-xs font-bold text-white shadow-sm shadow-blue-600/20 transition-all hover:bg-blue-700">Cek Status</Link>
+          </div>}
 
-          {isUserAdmin && (
-            <div className="mt-6 p-4 rounded-2xl bg-slate-900 text-white flex items-center justify-between shadow-lg">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center text-amber-400">
-                  <ShieldCheck className="w-5 h-5" />
-                </div>
-                <div>
-                  <p className="font-bold text-sm">Dashboard Admin</p>
-                  <p className="text-xs text-slate-400">Kelola dan pantau seluruh pesanan booking</p>
-                </div>
-              </div>
-              <Link
-                href="/admin/dashboard"
-                className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition-all shadow-sm"
-              >
-                Buka Dashboard
-              </Link>
-            </div>
-          )}
+          {isUserAdmin && <div className="mt-6 flex items-center justify-between rounded-2xl bg-slate-900 p-4 text-white shadow-lg">
+            <div className="flex items-center gap-3"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/10 text-amber-400"><ShieldCheck className="h-5 w-5" /></div><div><p className="text-sm font-bold">Dashboard Admin</p><p className="text-xs text-slate-400">Kelola dan pantau seluruh pesanan booking</p></div></div>
+            <Link href="/admin/dashboard" className="rounded-xl bg-blue-600 px-4 py-2 text-xs font-bold text-white shadow-sm transition-all hover:bg-blue-700">Buka Dashboard</Link>
+          </div>}
 
-          {message && <p className="mt-5 text-center text-sm font-medium text-blue-600">{message}</p>}
+          {message && <p role="status" className="mt-5 text-center text-sm font-medium text-blue-600">{message}</p>}
         </div>
       </div>
     </section>
