@@ -81,6 +81,7 @@ export function getBookings(): BookingData[] {
   return bookingCache;
 }
 
+/** Loads rows permitted by the caller's Supabase RLS policies. */
 export async function loadBookings(): Promise<BookingData[]> {
   const { data, error } = await supabase
     .from("bookings")
@@ -91,11 +92,19 @@ export async function loadBookings(): Promise<BookingData[]> {
   return bookingCache;
 }
 
-export async function saveBooking(input: Omit<BookingData, "id" | "createdAt" | "updatedAt" | "status" | "userId"> & { userId?: string }): Promise<BookingData> {
+/** Insert a booking in Supabase; the current Auth user id is read from the
+ * Supabase session rather than trusting a user id supplied by the form.
+ */
+export async function saveBooking(
+  input: Omit<BookingData, "id" | "createdAt" | "updatedAt" | "status" | "userId" | "username"> & { userId?: string },
+): Promise<BookingData> {
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+  if (sessionError) throw sessionError;
+
   const { data, error } = await supabase
     .from("bookings")
     .insert({
-      user_id: input.userId ?? null,
+      user_id: sessionData.session?.user.id ?? null,
       customer_name: input.name.trim(),
       phone: input.phone.trim(),
       motorcycle: input.motorcycle.trim(),
@@ -106,9 +115,10 @@ export async function saveBooking(input: Omit<BookingData, "id" | "createdAt" | 
     })
     .select("*")
     .single();
+
   if (error) throw error;
   const booking = fromRow(data as BookingRow);
-  bookingCache = [booking, ...bookingCache];
+  bookingCache = [booking, ...bookingCache.filter((item) => item.id !== booking.id)];
   dispatchUpdate();
   return booking;
 }
